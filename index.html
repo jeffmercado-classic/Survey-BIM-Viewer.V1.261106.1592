@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Survey-BIM Viewer (Multi-section)</title>
+  <style>
+    :root { --bg: #eef3f8; --panel: rgba(255, 255, 255, 0.88); --line: #d7e0ea; --text: #1f2937; --accent: #0ea5e9; --accent2: #2563eb; --shadow: 0 10px 30px rgba(15,23,42,0.15); }
+    * { box-sizing: border-box; }
+    body { margin: 0; overflow: hidden; font-family: 'Inter', Segoe UI, Arial, sans-serif; background: var(--bg); color: var(--text); user-select: none; }
+    #canvas-bg { position: absolute; inset: 0; z-index: 0; background: linear-gradient(180deg, #dfeaf6 0%, #eef3f8 60%, #f7f9fc 100%); }
+    #canvas-container { position: absolute; inset: 0; z-index: 1; }
+    
+    .glass-panel { background: var(--panel); backdrop-filter: blur(12px); border: 1px solid var(--line); box-shadow: var(--shadow); border-radius: 12px; padding: 16px; z-index: 100; position: absolute; }
+    
+    /* Bottom Loader Bar */
+    #bottomLoader { bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; width: max-content; }
+    .file-group { display: flex; flex-direction: column; gap: 6px; }
+    .file-group span { font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; }
+    input[type="file"] { font-size: 12px; color: var(--text); background: #fff; border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; cursor: pointer; max-width: 250px; }
+    
+    /* Right Toolbar (Settings) */
+    #rightToolbar { top: 24px; right: 24px; width: 320px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 48px); overflow-y: auto; transition: transform 0.3s ease; }
+    #rightToolbar.collapsed { transform: translateX(calc(100% + 40px)); }
+    #rightToolbar h2 { margin: 0; font-size: 14px; font-weight: 700; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    
+    /* Slide Toggle Button */
+    #toggleSettings { position: fixed; z-index: 120; right: 344px; left: auto; top: 40px; width: 32px; height: 36px; background: var(--panel); border: 1px solid var(--line); border-right: none; border-radius: 8px 0 0 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; box-shadow: -4px 4px 10px rgba(0,0,0,0.05); color: var(--text); backdrop-filter: blur(12px); }
+    #toggleSettings:hover { background: #fff; }
+    #toggleSettings.panel-collapsed { right: 0; }
+    .section-row { display:flex; align-items:center; gap:4px; margin-top:5px; }
+    .section-row button { border:1px solid #cbd5e1; background:#fff; color:#1f2937; border-radius:5px; font-size:11px; padding:5px 7px; cursor:pointer; }
+    .section-row .section-name { flex:1; text-align:left; }
+    .section-row .section-name.active { color:#fff; background:#2563eb; border-color:#2563eb; }
+    #sectionList:empty::after { content:'No section planes'; color:#64748b; font-size:11px; }
+
+    .tool-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 500; }
+    .tool-row input[type="range"] { width: 100px; }
+    .tool-row input[type="number"], .tool-row input[type="text"] { width: 80px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; text-align: right; }
+    
+    #surfaceMenu { display:none; position:fixed; z-index:200; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 5px 18px rgba(0,0,0,.2); padding:5px; min-width:165px; }
+    #surfaceMenu button { display:block; border:0; background:transparent; text-align:left; width:100%; padding:8px 10px; cursor:pointer; border-radius:4px; }
+    #surfaceMenu button:hover { background:#e2e8f0; }
+    #surfaceMenu button:disabled { opacity:.4; cursor:default; }
+    /* Action Buttons */
+    .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+    .btn { flex: 1; padding: 10px; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 12px; transition: 0.2s; background: #fff; border: 1px solid var(--line); color: var(--text); }
+    .btn:hover { background: #f8fafc; transform: translateY(-1px); }
+    .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; border: none; }
+    .btn-primary:hover { background: linear-gradient(135deg, var(--accent2), var(--accent)); color: #fff; }
+    
+    /* Floating Labels & Inspect Cards */
+    .tolValueLabel { position: absolute; z-index: 29; background: transparent; border: none; padding: 0; font-weight: 700; line-height: 1; pointer-events: none; white-space: nowrap; text-shadow: 0 0 3px rgba(255,255,255,.95), 0 0 8px rgba(255,255,255,.9); transform: translate(8px, -8px); }
+    .inspectCard { position: absolute; z-index: 40; background: #1e293b; color: #fff; border: 1px solid #475569; border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.4; box-shadow: 0 10px 25px rgba(0,0,0,0.3); pointer-events: none; white-space: pre; transform: translate(12px, -12px); }
+  </style>
+</head>
+<body>
+<div id="canvas-bg"></div>
+<div id="canvas-container"></div>
+<div id="surfaceMenu">
+  <button id="createPlaneCut">Create plane cut here</button>
+  <button id="flipPlaneCut">Flip cut direction</button>
+  <button id="removePlaneCut">Remove plane cut</button>
+</div>
+
+<div id="bottomLoader" class="glass-panel">
+  <div class="file-group">
+    <span style="color: var(--accent2);">1. Report CSV (Appendable)</span>
+    <input type="file" id="csvInput" accept=".csv" multiple title="Upload Grid Tolerance Report(s)">
+  </div>
+  <div class="file-group">
+    <span>2. Point Cloud (.PTS)</span>
+    <input type="file" id="ptsInput" accept=".pts">
+  </div>
+  <div class="file-group">
+    <span>3. 3D Model (.DXF, .STL, .OBJ)</span>
+    <input type="file" id="modelInput" accept=".dxf,.obj,.stl,.glb,.gltf">
+  </div>
+</div>
+
+<button id="toggleSettings" type="button" aria-label="Minimize settings" aria-expanded="true" title="Minimize settings">▶</button>
+<div id="rightToolbar" class="glass-panel">
+  <h2>Settings</h2>
+  <div class="tool-row">
+    <label for="orthoToggle">Ortho Camera</label>
+    <input type="checkbox" id="orthoToggle">
+  </div>
+  
+  <hr style="border: 0; border-top: 1px solid var(--line); width: 100%; margin: 2px 0;">
+
+  <div class="tool-row">
+    <label for="showCsv">Show Points</label>
+    <input type="checkbox" id="showCsv" checked>
+  </div>
+  <div class="tool-row">
+    <label for="csvSize">Point Size</label>
+    <input type="range" id="csvSize" min="0.05" max="1.0" step="0.05" value="0.3">
+  </div>
+  <div class="tool-row">
+    <label for="showTolText">Show Tolerance Text</label>
+    <input type="checkbox" id="showTolText" checked>
+  </div>
+  <div class="tool-row">
+    <label for="tolTextSize">Text Size (px)</label>
+    <input type="number" id="tolTextSize" value="11" min="8" max="28" step="1">
+  </div>
+  <div class="tool-row">
+    <label for="ootThreshold">OOT Threshold (mm)</label>
+    <input type="number" id="ootThreshold" value="50">
+  </div>
+  <div class="tool-row">
+    <label for="maxTolFilter">Hide &gt; Tolerance (mm)</label>
+    <input type="number" id="maxTolFilter" placeholder="e.g. 100" value="">
+  </div>
+
+  <hr style="border: 0; border-top: 1px solid var(--line); width: 100%; margin: 2px 0;">
+
+  <div class="tool-row">
+    <label for="showPts">Show Point Cloud</label>
+    <input type="checkbox" id="showPts" checked>
+  </div>
+  <div class="tool-row">
+    <label for="ptsOpacity">Point Cloud Opacity</label>
+    <input type="range" id="ptsOpacity" min="0.1" max="1.0" step="0.1" value="0.8">
+  </div>
+
+  <hr style="border: 0; border-top: 1px solid var(--line); width: 100%; margin: 2px 0;">
+
+  <div class="tool-row">
+    <label for="showModel">Show 3D Model</label>
+    <input type="checkbox" id="showModel" checked>
+  </div>
+  <div class="tool-row">
+    <label for="modelOpacity">Model Opacity</label>
+    <input type="range" id="modelOpacity" min="0.1" max="1.0" step="0.1" value="0.8">
+  </div>
+  
+  <div class="btn-row">
+    <button class="btn" id="toggleEdges" type="button" aria-pressed="false">Show Geometry Edges</button>
+  </div>
+  <hr style="border:0; border-top:1px solid var(--line); width:100%; margin:2px 0;">
+  <h2>Section planes</h2>
+  <div style="font-size:11px; color:#64748b; line-height:1.4;">Select a surface, then right-click to create a section. Choose a section below to move, flip or remove it.</div>
+  <div id="sectionList"></div>
+  <div class="btn-row"><button class="btn" id="clearAllSections" type="button">Clear All Sections</button></div>
+  <div class="btn-row" style="margin-top: 10px;">
+    <button class="btn btn-primary" id="btnFit" style="width: 100%;">Fit View</button>
+  </div>
+</div>
+
+<!-- Three.js Core -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+
+<!-- Format Loaders -->
+<script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+const el = id => document.getElementById(id);
+
+let scene, camera, renderer, controls, raycaster;
+let csvGroup, ptsGroup, modelGroup, inspectGroup;
+let globalShift = { x: 0, y: 0, z: 0 };
+let bounds = { minX: Infinity, minY: Infinity, minZ: Infinity, maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity };
+let isInitialized = false;
+
+// Data containers
+let csvPoints = [], ptsRaw = [];
+let rawModelData = null, currentModelType = ''; 
+let rawDXFBlocks = null; // Stores extracted raw PolyFace block arrays
+let toleranceLabels = [];
+let inspectPoint = null, inspectCardNode = null;
+let selectedSurface = null, selectionOutline = null;
+let sections = [], activeSection = null, cutControl = null;
+let nextSectionId = 1, showGeometryEdges = false;
+const MAX_SECTIONS = 6;
+let suppressCutEvents = false, suppressSurfaceClick = false;
+
+function initThree() {
+    if(isInitialized) return;
+    const container = el('canvas-container');
+    scene = new THREE.Scene();
+    
+    const aspect = window.innerWidth / window.innerHeight;
+    camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 100000);
+    camera.position.set(20, 20, 20);
+    camera.up.set(0, 0, 1);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.localClippingEnabled = true;
+    container.appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.screenSpacePanning = true;
+
+    raycaster = new THREE.Raycaster();
+    raycaster.params.Points.threshold = 0.2;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.9);
+    dl.position.set(1, 1, 2);
+    scene.add(dl);
+
+    csvGroup = new THREE.Group(); scene.add(csvGroup);
+    ptsGroup = new THREE.Group(); scene.add(ptsGroup);
+    modelGroup = new THREE.Group(); scene.add(modelGroup);
+    inspectGroup = new THREE.Group(); scene.add(inspectGroup);
+
+    renderer.domElement.addEventListener('click', (e) => {
+        if (!csvPoints.length) return;
+        const mouse = new THREE.Vector2(
+            (e.clientX / window.innerWidth) * 2 - 1,
+            -(e.clientY / window.innerHeight) * 2 + 1
+        );
+        raycaster.setFromCamera(mouse, camera);
+        
+        if (csvGroup.children.length > 0) {
+            const hits = raycaster.intersectObject(csvGroup.children[0]);
+            if (hits.length > 0) {
+                const visiblePts = getVisibleCsvPoints();
+                const visibleHit = hits.find(h => h.index >= 0 && h.index < visiblePts.length && isSurveyPointVisible(visiblePts[h.index]));
+                const idx = visibleHit ? visibleHit.index : -1;
+                if (idx >= 0) {
+                    inspectPoint = visiblePts[idx];
+                    updateInspectCard();
+                    return;
+                }
+            }
+        }
+        inspectPoint = null;
+        updateInspectCard();
+    });
+
+    window.addEventListener('resize', () => {
+        const aspect = window.innerWidth / window.innerHeight;
+        if (camera.isPerspectiveCamera) {
+            camera.aspect = aspect;
+        } else {
+            const height = camera.top - camera.bottom;
+            camera.left = -height * aspect / 2;
+            camera.right = height * aspect / 2;
+        }
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    isInitialized = true;
+    setupSurfaceInteraction();
+    renderLoop();
+}
+
+function renderLoop() {
+    requestAnimationFrame(renderLoop);
+    controls.update();
+    renderer.render(scene, camera);
+    updateLabels();
+}
+
+function updateBounds(x, y, z) {
+    if (x < bounds.minX) bounds.minX = x; if (x > bounds.maxX) bounds.maxX = x;
+    if (y < bounds.minY) bounds.minY = y; if (y > bounds.maxY) bounds.maxY = y;
+    if (z < bounds.minZ) bounds.minZ = z; if (z > bounds.maxZ) bounds.maxZ = z;
+}
+
+function calculateShift() {
+    const old = { ...globalShift };
+    if (bounds.minX !== Infinity) {
+        globalShift = { x: bounds.minX, y: bounds.minY, z: bounds.minZ };
+    } else if (currentModelType === 'dxf' && rawModelData && rawModelData.origin) {
+        globalShift = { ...rawModelData.origin };
+    } else {
+        globalShift = { x: 0, y: 0, z: 0 };
+    }
+    // Keep the camera on the same world location when the floating origin changes.
+    if (controls && camera) {
+        const dx = old.x - globalShift.x, dy = old.y - globalShift.y, dz = old.z - globalShift.z;
+        controls.target.add(new THREE.Vector3(dx, dy, dz));
+        camera.position.add(new THREE.Vector3(dx, dy, dz));
+        controls.update();
+    }
+    const shiftDelta = new THREE.Vector3(old.x-globalShift.x, old.y-globalShift.y, old.z-globalShift.z);
+    if (selectionOutline) selectionOutline.position.add(shiftDelta);
+    suppressCutEvents = true;
+    for (const section of sections) {
+        section.pivot.position.add(shiftDelta);
+        section.plane.setFromNormalAndCoplanarPoint(section.plane.normal, section.pivot.position);
+    }
+    suppressCutEvents = false;
+    if (currentModelType === 'dxf') modelGroup.position.set(0, 0, 0);
+    else modelGroup.position.set(-globalShift.x, -globalShift.y, -globalShift.z);
+}
+
+function worldToScreen(x, y, z) {
+    const v = new THREE.Vector3(x - globalShift.x, y - globalShift.y, z - globalShift.z);
+    v.project(camera);
+    return {
+        x: (v.x * .5 + .5) * window.innerWidth,
+        y: (-v.y * .5 + .5) * window.innerHeight,
+        visible: (v.z >= -1 && v.z <= 1)
+    };
+}
+
+function getVisibleCsvPoints() {
+    const maxTolFilter = parseFloat(el('maxTolFilter').value);
+    return csvPoints.filter(p => {
+        if (!isNaN(maxTolFilter) && p.tol !== undefined) {
+            const mm = Math.abs(p.tol * 1000);
+            if (mm > maxTolFilter) return false;
+        }
+        return true;
+    });
+}
+
+function clearToleranceLabels() {
+    toleranceLabels.forEach(l => l.node.remove());
+    toleranceLabels = [];
+}
+
+function rebuildToleranceLabels() {
+    clearToleranceLabels();
+    if (!el('showTolText').checked || !el('showCsv').checked) return;
+
+    const visiblePts = getVisibleCsvPoints();
+    const fontSize = parseInt(el('tolTextSize').value) || 11;
+    const ootThreshold = parseFloat(el('ootThreshold').value) || 50;
+
+    visiblePts.forEach(p => {
+        if (p.tol === undefined) return;
+        const mm = Math.round(p.tol * 1000);
+        const node = document.createElement('div');
+        node.className = 'tolValueLabel';
+        node.textContent = String(mm);
+        node.style.fontSize = fontSize + 'px';
+        
+        if (Math.abs(mm) > ootThreshold) node.style.color = '#ef4444'; 
+        else node.style.color = '#000000';
+        
+        document.body.appendChild(node);
+        toleranceLabels.push({ point: p, node });
+    });
+}
+
+function updateLabels() {
+    toleranceLabels.forEach(item => {
+        const s = worldToScreen(item.point.x, item.point.y, item.point.z);
+        if (s.visible && isSurveyPointVisible(item.point)) {
+            item.node.style.left = s.x + 'px';
+            item.node.style.top = s.y + 'px';
+            item.node.style.display = 'block';
+        } else {
+            item.node.style.display = 'none';
+        }
+    });
+
+    if (inspectPoint && inspectCardNode) {
+        const s = worldToScreen(inspectPoint.x, inspectPoint.y, inspectPoint.z);
+        if (s.visible && isSurveyPointVisible(inspectPoint)) {
+            inspectCardNode.style.left = s.x + 'px';
+            inspectCardNode.style.top = s.y + 'px';
+            inspectCardNode.style.display = 'block';
+        } else {
+            inspectCardNode.style.display = 'none';
+        }
+    }
+}
+
+function updateInspectCard() {
+    if (inspectCardNode) { inspectCardNode.remove(); inspectCardNode = null; }
+    while(inspectGroup.children.length) inspectGroup.remove(inspectGroup.children[0]);
+
+    if (!inspectPoint) return;
+
+    const sphereGeo = new THREE.SphereGeometry(0.08, 16, 16);
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0x2563eb });
+    const marker = new THREE.Mesh(sphereGeo, sphereMat);
+    marker.position.set(inspectPoint.x - globalShift.x, inspectPoint.y - globalShift.y, inspectPoint.z - globalShift.z);
+    inspectGroup.add(marker);
+    applyClipping();
+
+    inspectCardNode = document.createElement('div');
+    inspectCardNode.className = 'inspectCard';
+    const mmVal = inspectPoint.tol !== undefined ? (inspectPoint.tol * 1000).toFixed(1) + ' mm' : 'N/A';
+    inspectCardNode.textContent = `Inspect Point (ENZ-Tol)\n` +
+                                `East / X:  ${inspectPoint.x.toFixed(3)} m\n` +
+                                `North / Y: ${inspectPoint.y.toFixed(3)} m\n` +
+                                `Elev / Z:  ${inspectPoint.z.toFixed(3)} m\n` +
+                                `Tolerance: ${mmVal}`;
+    document.body.appendChild(inspectCardNode);
+}
+
+function buildCsvMesh() {
+    if (!isInitialized) return;
+    while(csvGroup.children.length) { const obj = csvGroup.children[0]; csvGroup.remove(obj); if (obj.geometry) obj.geometry.dispose(); if (obj.material) obj.material.dispose(); }
+    clearToleranceLabels();
+    if(!el('showCsv').checked) return;
+
+    const visiblePts = getVisibleCsvPoints();
+    if (!visiblePts.length) return;
+
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(visiblePts.length * 3);
+    const cols = new Float32Array(visiblePts.length * 3);
+
+    visiblePts.forEach((p, i) => {
+        pos[i*3] = p.x - globalShift.x;
+        pos[i*3+1] = p.y - globalShift.y;
+        pos[i*3+2] = p.z - globalShift.z;
+        cols[i*3] = 16/255; cols[i*3+1] = 185/255; cols[i*3+2] = 129/255; // #10b981
+    });
+
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+
+    let pSize = parseFloat(el('csvSize').value);
+    if(el('orthoToggle').checked) pSize *= 20;
+
+    const mat = new THREE.PointsMaterial({ size: pSize, sizeAttenuation: true, vertexColors: true });
+    
+    // Frustum fix: compute bounds aggressively so Threejs knows they exist instantly
+    geo.computeBoundingSphere();
+    geo.computeBoundingBox();
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    csvGroup.add(points);
+
+    rebuildToleranceLabels();
+    applyClipping();
+}
+
+function buildPtsMesh() {
+    if (!isInitialized) return;
+    while(ptsGroup.children.length) { const obj = ptsGroup.children[0]; ptsGroup.remove(obj); if (obj.geometry) obj.geometry.dispose(); if (obj.material) obj.material.dispose(); }
+    if(!ptsRaw.length || !el('showPts').checked) return;
+
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(ptsRaw.length * 3);
+    const cols = new Float32Array(ptsRaw.length * 3);
+
+    ptsRaw.forEach((p, i) => {
+        pos[i*3] = p.x - globalShift.x; pos[i*3+1] = p.y - globalShift.y; pos[i*3+2] = p.z - globalShift.z;
+        cols[i*3] = p.r/255; cols[i*3+1] = p.g/255; cols[i*3+2] = p.b/255;
+    });
+
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+
+    let pOpacity = parseFloat(el('ptsOpacity').value);
+    let pSize = el('orthoToggle').checked ? 1.0 : 0.05;
+
+    const mat = new THREE.PointsMaterial({ size: pSize, sizeAttenuation: true, vertexColors: true, transparent: true, opacity: pOpacity });
+    
+    // Frustum fix: compute bounds aggressively so Threejs knows they exist instantly
+    geo.computeBoundingSphere();
+    geo.computeBoundingBox();
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    ptsGroup.add(points);
+    applyClipping();
+}
+
+// ASCII DXF PolyFace reader: resolves model-space block instances and OCS INSERTs.
+function parsePolyfaceDXF(text) {
+    const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+    if (lines[0] && lines[0].includes('AutoCAD Binary DXF')) throw new Error('Binary DXF is not supported; export ASCII DXF.');
+    const blocks = new Map(), layers = new Map(), root = [], warnings = [];
+    let section = '', block = null, poly = null, rec = null, definitions = 0;
+    const field = (r, code, fallback = '') => { const f = r.fields.find(x => x[0] === code); return f ? f[1] : fallback; };
+    const num = (r, code, fallback = 0) => { const x = Number.parseFloat(field(r, code, '')); return Number.isFinite(x) ? x : fallback; };
+    function dest() { return section === 'ENTITIES' ? root : (section === 'BLOCKS' && block ? block.entities : null); }
+    function finish() { if (poly) { const d = dest(); if (d && poly.enabled && poly.vertices.length && poly.faces.length) { d.push(poly); definitions++; } poly = null; } }
+    function handle(r) {
+        const t = r.type;
+        if (t === 'SECTION') { section = field(r, 2).toUpperCase(); return; }
+        if (t === 'ENDSEC') { finish(); section = ''; block = null; return; }
+        if (section === 'TABLES' && t === 'LAYER') {
+            const trueColor = field(r,420,'');
+            layers.set(field(r,2,'0'), { trueColor: trueColor === '' ? null : num(r,420), aci: Math.abs(num(r,62,7)) });
+            return;
+        }
+        if (section !== 'BLOCKS' && section !== 'ENTITIES') return;
+        if (t === 'BLOCK' && section === 'BLOCKS') {
+            finish(); const name = field(r, 2); block = { base: [num(r,10), num(r,20), num(r,30)], entities: [] }; blocks.set(name,block); return;
+        }
+        if (t === 'ENDBLK') { finish(); block = null; return; }
+        if (t === 'POLYLINE') { finish(); const c=field(r,420,''); poly = { type:'mesh', enabled: (num(r,70) & 64) !== 0, vertices:[], faces:[], layer:field(r,8,'0'), aci:num(r,62,256), trueColor:c === '' ? null : num(r,420) }; return; }
+        if (t === 'VERTEX' && poly) {
+            const flags = num(r,70), refs = [71,72,73,74].map(c => num(r,c)).filter(x => x !== 0);
+            if ((flags & 128) && refs.length >= 3) poly.faces.push(refs);
+            else if (flags & 64) poly.vertices.push([num(r,10),num(r,20),num(r,30)]);
+            return;
+        }
+        if (t === 'SEQEND') { finish(); return; }
+        if (poly) finish();
+        if (t === 'INSERT') {
+            const d=dest(); if (!d) return;
+            const cols=num(r,70,1), rows=num(r,71,1);
+            if(cols>1 || rows>1) warnings.push('INSERT arrays: only the first instance is supported.');
+            const c=field(r,420,'');
+            d.push({type:'insert',name:field(r,2),p:[num(r,10),num(r,20),num(r,30)],s:[num(r,41,1),num(r,42,1),num(r,43,1)],rot:num(r,50),n:[num(r,210,0),num(r,220,0),num(r,230,1)],layer:field(r,8,'0'),aci:num(r,62,256),trueColor:c === '' ? null : num(r,420)});
+        }
+    }
+    for (let i=0; i+1<lines.length; i+=2) {
+        const code=parseInt(lines[i].trim(),10), value=lines[i+1].trim();
+        if (code === 0) { if (rec) handle(rec); rec={type:value.toUpperCase(),fields:[]}; }
+        else if (rec && Number.isFinite(code)) rec.fields.push([code,value]);
+    }
+    if (rec) handle(rec); finish();
+    const positions=[], indices=[], colors=[], edgeIndices=[]; let meshInstances=0, invalidFaces=0, missingBlocks=0;
+    // True color (420) takes precedence; support ByLayer and ByBlock inheritance.
+    function aciColor(index) {
+        index=Math.abs(Math.round(index));
+        const basic=[0x000000,0xff0000,0xffff00,0x00ff00,0x00ffff,0x0000ff,0xff00ff,0xffffff,0x808080,0xc0c0c0];
+        if(index<10) return basic[index];
+        if(index>=250 && index<=255) { const shades=[51,80,105,130,190,255], c=shades[index-250]; return (c<<16)|(c<<8)|c; }
+        if(index<10 || index>249) return 0xcccccc;
+        const hue=Math.floor((index-10)/10)*15, n=(index-10)%10;
+        const brightness=[1,0.65,0.5,0.3,0.15][Math.floor(n/2)], saturation=(n%2) ? 0.5 : 1;
+        const chroma=brightness*saturation, k=hue/60, x=chroma*(1-Math.abs((k%2)-1)), m=brightness-chroma;
+        let rgb=k<1?[chroma,x,0]:k<2?[x,chroma,0]:k<3?[0,chroma,x]:k<4?[0,x,chroma]:k<5?[x,0,chroma]:[chroma,0,x];
+        rgb=rgb.map(v=>Math.max(0,Math.min(255,Math.round((v+m)*255)))); return (rgb[0]<<16)|(rgb[1]<<8)|rgb[2];
+    }
+    function resolved(e, inheritedLayer, inheritedColor) {
+        const layer = !e.layer || e.layer==='0' ? (inheritedLayer || '0') : e.layer;
+        if(e.trueColor !== null && e.trueColor !== undefined) return {layer, color:e.trueColor & 0xffffff};
+        const index=Math.abs(e.aci == null ? 256 : e.aci);
+        if(index===0) return {layer, color:inheritedColor == null ? 0xffffff : inheritedColor};
+        if(index===256) { const l=layers.get(layer); return {layer,color: l ? (l.trueColor == null ? aciColor(l.aci) : l.trueColor & 0xffffff) : 0xffffff}; }
+        return {layer,color:aciColor(index)};
+    }
+    let minX=Infinity,minY=Infinity,minZ=Infinity;
+    function walk(list, parent, stack, inheritedLayer, inheritedColor) {
+        for (const e of list) {
+            const appearance=resolved(e,inheritedLayer,inheritedColor);
+            if (e.type === 'mesh') {
+                const off=positions.length/3;
+                for (const v of e.vertices) {
+                    const p=new THREE.Vector3(v[0],v[1],v[2]).applyMatrix4(parent);
+                    positions.push(p.x,p.y,p.z);
+                    colors.push(((appearance.color >> 16)&255)/255, ((appearance.color >> 8)&255)/255, (appearance.color&255)/255);
+                    minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); minZ=Math.min(minZ,p.z);
+                }
+                const visibleEdges = new Set();
+                for (const face of e.faces) {
+                    const f=face.map(x => Math.abs(x)-1);
+                    if (f.some(x => !Number.isInteger(x) || x<0 || x>=e.vertices.length)) { invalidFaces++; continue; }
+                    indices.push(off+f[0],off+f[1],off+f[2]);
+                    if(f.length>3 && f[3]!==f[2]) indices.push(off+f[0],off+f[2],off+f[3]);
+                    // Edge k runs from face[k] to face[k+1]. A negative index means hidden.
+                    // These are original PolyFace edges, never the added quad diagonal.
+                    for (let k=0; k<f.length; k++) {
+                        const a=f[k], b=f[(k+1)%f.length];
+                        if (face[k] < 0 || a===b) continue;
+                        const key=Math.min(a,b)+':'+Math.max(a,b);
+                        if (!visibleEdges.has(key)) { visibleEdges.add(key); edgeIndices.push(off+a,off+b); }
+                    }
+                }
+                meshInstances++; continue;
+            }
+            const b=blocks.get(e.name);
+            if (!b) { missingBlocks++; continue; }
+            if (stack.includes(e.name) || stack.length >= 100) { warnings.push('Circular or excessively deep block reference skipped: '+e.name); continue; }
+            // AutoCAD arbitrary-axis algorithm: INSERT coordinates are in its OCS.
+            const n=new THREE.Vector3(...e.n);
+            if(n.lengthSq() < 1e-20) { warnings.push('Zero extrusion vector; defaulted to Z.'); n.set(0,0,1); }
+            n.normalize();
+            const ax=(Math.abs(n.x)<1/64 && Math.abs(n.y)<1/64)
+                ? new THREE.Vector3(0,1,0).cross(n).normalize()
+                : new THREE.Vector3(0,0,1).cross(n).normalize();
+            const ay=new THREE.Vector3().crossVectors(n,ax).normalize();
+            const ocs=new THREE.Matrix4().makeBasis(ax,ay,n);
+            const m=parent.clone().multiply(ocs)
+                .multiply(new THREE.Matrix4().makeTranslation(...e.p))
+                .multiply(new THREE.Matrix4().makeRotationZ(e.rot*Math.PI/180))
+                .multiply(new THREE.Matrix4().makeScale(...e.s))
+                .multiply(new THREE.Matrix4().makeTranslation(-b.base[0],-b.base[1],-b.base[2]));
+            walk(b.entities,m,stack.concat(e.name),appearance.layer,appearance.color);
+        }
+    }
+    walk(root,new THREE.Matrix4(),[],null,null);
+    if (!indices.length) throw new Error('No valid model-space PolyFace triangles found. Check that this is an ASCII DXF with inserted PolyFace blocks.');
+    return {positions,indices,colors,edgeIndices,origin:{x:minX,y:minY,z:minZ},definitions,meshInstances,invalidFaces,missingBlocks,warnings:[...new Set(warnings)]};
+}
+
+function buildModelMesh() {
+    if (!isInitialized) return;
+    while(modelGroup.children.length) {
+        const obj=modelGroup.children[0]; modelGroup.remove(obj);
+        obj.traverse(child => {
+            if (child.userData && child.userData.edgeOverlay) { if(child.geometry) child.geometry.dispose(); if(child.material) child.material.dispose(); }
+        });
+        if (obj.userData && obj.userData.ownedDxf) { if(obj.geometry) obj.geometry.dispose(); if(obj.material) obj.material.dispose(); }
+    }
+    if(!rawModelData || !el('showModel').checked) return;
+
+    const opacity = parseFloat(el('modelOpacity').value);
+    const isTransparent = opacity < 1.0;
+    const defaultColor = 0xcad4e0;
+
+    if (currentModelType === 'dxf') {
+        const world = rawModelData.positions;
+        const local = new Float32Array(world.length);
+        for (let i = 0; i < world.length; i += 3) {
+            local[i] = world[i] - globalShift.x;
+            local[i+1] = world[i+1] - globalShift.y;
+            local[i+2] = world[i+2] - globalShift.z;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(local, 3));
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(rawModelData.colors, 3));
+        geo.setIndex(rawModelData.indices);
+        geo.computeBoundingBox(); geo.computeBoundingSphere();
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: isTransparent, opacity, side: THREE.DoubleSide });
+        modelGroup.position.set(0,0,0);
+        const mesh=new THREE.Mesh(geo, mat); mesh.userData.ownedDxf=true; modelGroup.add(mesh);
+        if (showGeometryEdges && rawModelData.edgeIndices.length) {
+            const edgeGeo=new THREE.BufferGeometry();
+            edgeGeo.setAttribute('position',new THREE.BufferAttribute(local,3));
+            edgeGeo.setIndex(rawModelData.edgeIndices);
+            const edgeMat=new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:1,depthTest:true,depthWrite:false});
+            const edgeLines=new THREE.LineSegments(edgeGeo,edgeMat);
+            edgeLines.userData.edgeOverlay=true; edgeLines.renderOrder=2; modelGroup.add(edgeLines);
+        }
+    } else if (currentModelType === 'obj') {
+        rawModelData.traverse(child => {
+            if (child.isMesh) {
+                child.material = new THREE.MeshStandardMaterial({ 
+                    color: defaultColor, transparent: isTransparent, opacity: opacity, side: THREE.DoubleSide
+                });
+            }
+        });
+        modelGroup.add(rawModelData.clone());
+    } else if (currentModelType === 'stl') {
+        const material = new THREE.MeshStandardMaterial({ color: defaultColor, transparent: isTransparent, opacity: opacity, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(rawModelData, material);
+        modelGroup.add(mesh);
+    } else if (currentModelType === 'gltf') {
+        rawModelData.traverse(child => {
+            if (child.isMesh && child.material) {
+                child.material = child.material.clone();
+                child.material.transparent = isTransparent;
+                child.material.opacity = opacity;
+                child.material.side = THREE.DoubleSide;
+            }
+        });
+        modelGroup.add(rawModelData.clone());
+    }
+    if (showGeometryEdges && currentModelType !== 'dxf') {
+        const meshes=[]; modelGroup.traverse(obj => { if(obj.isMesh && obj.geometry) meshes.push(obj); });
+        for (const mesh of meshes) {
+            const edgeGeo=new THREE.EdgesGeometry(mesh.geometry,10);
+            const edgeMat=new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:1,depthTest:true,depthWrite:false});
+            const lines=new THREE.LineSegments(edgeGeo,edgeMat); lines.userData.edgeOverlay=true; lines.renderOrder=2; mesh.add(lines);
+        }
+    }
+    applyClipping();
+}
+
+function refreshAllMeshes() {
+    calculateShift();
+    buildCsvMesh();
+    buildPtsMesh();
+    buildModelMesh();
+    if (inspectPoint) updateInspectCard();
+}
+
+// Independent, non-destructive section planes. All planes clip the model and points.
+function isLocalPointVisible(point) {
+    return sections.every(section => section.plane.distanceToPoint(point) >= -0.000001);
+}
+function isSurveyPointVisible(point) {
+    if (!sections.length) return true;
+    return isLocalPointVisible(new THREE.Vector3(point.x-globalShift.x,point.y-globalShift.y,point.z-globalShift.z));
+}
+function applyClipping() {
+    if (!isInitialized) return;
+    const planes=sections.map(section => section.plane);
+    for (const group of [csvGroup,ptsGroup,modelGroup,inspectGroup]) {
+        group.traverse(obj => {
+            if (!obj.material) return;
+            const materials=Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const mat of materials) {
+                if (!mat) continue;
+                const previous=mat.clippingPlanes ? mat.clippingPlanes.length : 0;
+                mat.clippingPlanes=planes;
+                mat.clipIntersection=false;
+                if (previous !== planes.length) mat.needsUpdate=true;
+            }
+        });
+    }
+}
+function clearSurfaceSelection() {
+    selectedSurface=null;
+    if (selectionOutline) {
+        scene.remove(selectionOutline);
+        selectionOutline.geometry.dispose(); selectionOutline.material.dispose();
+        selectionOutline=null;
+    }
+}
+function selectModelSurface(e) {
+    if (!isInitialized || !modelGroup.children.length || !el('showModel').checked) return false;
+    const rect=renderer.domElement.getBoundingClientRect();
+    const mouse=new THREE.Vector2((e.clientX-rect.left)/rect.width*2-1, -(e.clientY-rect.top)/rect.height*2+1);
+    scene.updateMatrixWorld(true); raycaster.setFromCamera(mouse,camera);
+    const hits=raycaster.intersectObjects(modelGroup.children,true);
+    const hit=hits.find(h => h.face && isLocalPointVisible(h.point));
+    if (!hit) return false;
+    const normal=hit.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize();
+    if (normal.lengthSq()<1e-12) return false;
+    clearSurfaceSelection();
+    selectedSurface={point:hit.point.clone().add(new THREE.Vector3(globalShift.x,globalShift.y,globalShift.z)),normal};
+    const attr=hit.object.geometry.getAttribute('position');
+    const tri=[hit.face.a,hit.face.b,hit.face.c].map(i=>new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(hit.object.matrixWorld));
+    const outlineGeo=new THREE.BufferGeometry().setFromPoints([tri[0],tri[1],tri[1],tri[2],tri[2],tri[0]]);
+    selectionOutline=new THREE.LineSegments(outlineGeo,new THREE.LineBasicMaterial({color:0xff4d00,depthTest:false}));
+    selectionOutline.renderOrder=999; scene.add(selectionOutline);
+    return true;
+}
+function updateCutFromPivot() {
+    if (!activeSection || suppressCutEvents) return;
+    activeSection.plane.setFromNormalAndCoplanarPoint(activeSection.plane.normal,activeSection.pivot.position);
+}
+function renderSectionList() {
+    const list=el('sectionList'); list.textContent='';
+    for (const section of sections) {
+        const row=document.createElement('div'); row.className='section-row';
+        const select=document.createElement('button'); select.type='button';
+        select.className='section-name'+(section===activeSection?' active':'');
+        select.textContent='Section '+section.id; select.title='Select this section to move it';
+        select.addEventListener('click',()=>activateSection(section));
+        const flip=document.createElement('button'); flip.type='button'; flip.textContent='Flip';
+        flip.title='Flip this section direction'; flip.addEventListener('click',()=>flipSection(section));
+        const del=document.createElement('button'); del.type='button'; del.textContent='×';
+        del.title='Remove this section'; del.setAttribute('aria-label','Remove section '+section.id);
+        del.addEventListener('click',()=>removeSection(section));
+        row.append(select,flip,del); list.appendChild(row);
+    }
+}
+function ensureCutControl() {
+    if (!THREE.TransformControls) { alert('Section controls could not load. Check your internet connection and reload.'); return false; }
+    if (!cutControl) {
+        cutControl=new THREE.TransformControls(camera,renderer.domElement);
+        cutControl.setMode('translate'); cutControl.setSpace('world'); cutControl.setSize(0.8);
+        cutControl.addEventListener('dragging-changed',event=>{
+            controls.enabled=!event.value;
+            if (!event.value) { suppressSurfaceClick=true; setTimeout(()=>{suppressSurfaceClick=false;},100); }
+        });
+        cutControl.addEventListener('objectChange',updateCutFromPivot); scene.add(cutControl);
+    }
+    return true;
+}
+function activateSection(section) {
+    if (!section || !sections.includes(section) || !ensureCutControl()) return;
+    activeSection=section; cutControl.camera=camera; cutControl.attach(section.pivot); cutControl.visible=true;
+    renderSectionList();
+}
+function createPlaneCut() {
+    if (!selectedSurface) return;
+    if (sections.length>=MAX_SECTIONS) { alert('Maximum of '+MAX_SECTIONS+' simultaneous section planes reached.'); return; }
+    if (!ensureCutControl()) return;
+    const pivot=new THREE.Object3D(); scene.add(pivot);
+    pivot.position.copy(selectedSurface.point).sub(new THREE.Vector3(globalShift.x,globalShift.y,globalShift.z));
+    // Reversed compared with the previous viewer, as requested.
+    const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(selectedSurface.normal.clone().negate(),pivot.position);
+    const section={id:nextSectionId++,pivot,plane}; sections.push(section);
+    activateSection(section); applyClipping(); clearSurfaceSelection();
+}
+function flipSection(section) { if(section && sections.includes(section)) section.plane.negate(); }
+function flipPlaneCut() { flipSection(activeSection); }
+function removeSection(section) {
+    const index=sections.indexOf(section); if(index<0) return;
+    if (activeSection===section && cutControl) { cutControl.detach(); cutControl.visible=false; activeSection=null; }
+    scene.remove(section.pivot); sections.splice(index,1);
+    if(!activeSection && sections.length) activateSection(sections[Math.min(index,sections.length-1)]);
+    if(controls) controls.enabled=true;
+    applyClipping(); renderSectionList();
+}
+function clearPlaneCut() {
+    if (cutControl) { cutControl.detach(); cutControl.visible=false; }
+    for (const section of sections) scene.remove(section.pivot);
+    sections=[]; activeSection=null;
+    if (controls) controls.enabled=true;
+    applyClipping(); renderSectionList();
+}
+function setupSurfaceInteraction() {
+    const canvas=renderer.domElement, menu=el('surfaceMenu'); let rightStart=null;
+    canvas.addEventListener('pointerdown',e=>{if(e.button===2) rightStart={x:e.clientX,y:e.clientY};});
+    canvas.addEventListener('click',e=>{if(e.button===0 && !suppressSurfaceClick && !(cutControl && cutControl.dragging)) selectModelSurface(e);});
+    canvas.addEventListener('contextmenu',e=>{
+        e.preventDefault();
+        if(rightStart && Math.hypot(e.clientX-rightStart.x,e.clientY-rightStart.y)>6) {rightStart=null;return;}
+        rightStart=null;
+        // Keep an already selected surface; a direct right-click can also select one.
+        if(!selectedSurface) selectModelSurface(e);
+        if(!selectedSurface && !activeSection) return;
+        el('createPlaneCut').disabled=!selectedSurface || sections.length>=MAX_SECTIONS;
+        el('flipPlaneCut').disabled=!activeSection; el('removePlaneCut').disabled=!activeSection;
+        menu.style.display='block';
+        menu.style.left=Math.max(0,Math.min(e.clientX,window.innerWidth-menu.offsetWidth-5))+'px';
+        menu.style.top=Math.max(0,Math.min(e.clientY,window.innerHeight-menu.offsetHeight-5))+'px';
+    });
+    document.addEventListener('pointerdown',e=>{if(!menu.contains(e.target)) menu.style.display='none';});
+    el('createPlaneCut').addEventListener('click',()=>{menu.style.display='none';createPlaneCut();});
+    el('flipPlaneCut').addEventListener('click',()=>{menu.style.display='none';flipPlaneCut();});
+    el('removePlaneCut').addEventListener('click',()=>{menu.style.display='none';removeSection(activeSection);clearSurfaceSelection();});
+    document.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.style.display='none';clearSurfaceSelection();}});
+}
+
+
+// File Loaders
+el('csvInput').addEventListener('change', async e => {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    if (!files.length) return;
+    initThree();
+    try {
+        const texts = await Promise.all(files.map(file => file.text()));
+        let added = 0;
+        for (const text of texts) {
+            const lines = text.split(/\r?\n/);
+            const headers = (lines[0] || '').replace(/^\uFEFF/, '').toLowerCase().split(',').map(h => h.trim());
+            const ix = headers.findIndex(h => h.includes('east') || h === 'x');
+            const iy = headers.findIndex(h => h.includes('north') || h === 'y');
+            const iz = headers.findIndex(h => h.includes('elevation') || h === 'z');
+            const it = headers.findIndex(h => h.includes('tolerance') || h.includes('deviation'));
+            for (let i=1; i<lines.length; i++) {
+                const c=lines[i].split(',');
+                const x=parseFloat(c[ix >= 0 ? ix : 1]), y=parseFloat(c[iy >= 0 ? iy : 2]), z=parseFloat(c[iz >= 0 ? iz : 3]);
+                const t=it >= 0 ? parseFloat(c[it]) : NaN;
+                if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                    csvPoints.push({x,y,z,tol:Number.isFinite(t) ? t : undefined}); updateBounds(x,y,z); added++;
+                }
+            }
+        }
+        if (!added) { alert('No valid ENZ points found in the selected CSV files.'); return; }
+        refreshAllMeshes();
+        el('btnFit').click();
+    } catch (err) { console.error('CSV loading failed:', err); alert('CSV loading failed: '+err.message); }
+});
+
+el('ptsInput').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(!file) return;
+
+    let keepRatioPrompt = prompt("Enter percentage of point cloud to keep (1 to 100):", "30");
+    if (keepRatioPrompt === null) {
+        e.target.value = ''; 
+        return;
+    }
+    
+    let keepRatio = parseFloat(keepRatioPrompt) / 100;
+    if (isNaN(keepRatio) || keepRatio <= 0 || keepRatio > 1) {
+        alert("Invalid percentage. Defaulting to 30%.");
+        keepRatio = 0.3;
+    }
+
+    initThree();
+    const CHUNK = 1024 * 1024 * 4;
+    let offset = 0, leftover = '';
+    ptsRaw = [];
+
+    function processLines(text) {
+        const lines = text.split(/\r?\n/);
+        leftover = lines.pop() || '';
+        for (const ln of lines) {
+            if (Math.random() > keepRatio) continue; 
+            const p = ln.trim().split(/[\s\t]+/);
+            if (p.length < 3) continue;
+            const x = parseFloat(p[0]), y = parseFloat(p[1]), z = parseFloat(p[2]);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            
+            let r = 200, g = 200, b = 200;
+            if (p.length >= 6) {
+                const cOff = p.length === 7 ? 4 : 3; 
+                r = Number.isFinite(parseInt(p[cOff])) ? parseInt(p[cOff]) : 200; g = Number.isFinite(parseInt(p[cOff+1])) ? parseInt(p[cOff+1]) : 200; b = Number.isFinite(parseInt(p[cOff+2])) ? parseInt(p[cOff+2]) : 200;
+            }
+            ptsRaw.push({ x, y, z, r, g, b });
+            updateBounds(x, y, z);
+        }
+    }
+
+    function readNext() {
+        const reader = new FileReader();
+        reader.onload = ev => {
+            processLines(leftover + ev.target.result);
+            offset += CHUNK;
+            if (offset < file.size) {
+                setTimeout(readNext, 5);
+            } else {
+                if(leftover) processLines(leftover + '\n');
+                refreshAllMeshes();
+            }
+        };
+        reader.readAsText(file.slice(offset, offset + CHUNK));
+    }
+    readNext();
+});
+
+el('modelInput').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(!file) return;
+    initThree();
+    clearPlaneCut(); clearSurfaceSelection();
+    
+    const ext = file.name.split('.').pop().toLowerCase();
+    const reader = new FileReader();
+
+    if (ext === 'dxf') {
+        reader.onload = ev => {
+            try {
+                const parsed = parsePolyfaceDXF(ev.target.result);
+                rawModelData = parsed; currentModelType = 'dxf';
+                refreshAllMeshes(); el('btnFit').click();
+                console.info('DXF loaded:', parsed.meshInstances, 'mesh instances,', parsed.indices.length/3, 'triangles;', parsed.definitions, 'definitions;', parsed.invalidFaces, 'invalid faces;', parsed.missingBlocks, 'missing block references.');
+                parsed.warnings.forEach(w => console.warn('DXF:', w));
+                if (parsed.invalidFaces || parsed.missingBlocks || parsed.warnings.length) alert('DXF loaded with warnings. See the browser console for details.');
+            } catch (err) { console.error('Error parsing DXF:', err); alert('DXF loading failed: '+err.message); }
+        };
+        reader.onerror = () => alert('Could not read the DXF file.');
+        reader.readAsText(file);
+    }
+    else if (ext === 'obj') {
+        reader.onload = ev => {
+            try {
+                const loader = new THREE.OBJLoader();
+                rawModelData = loader.parse(ev.target.result);
+                currentModelType = 'obj';
+                refreshAllMeshes();
+            } catch(err) { console.error("Error parsing OBJ."); }
+        };
+        reader.readAsText(file);
+    }
+    else if (ext === 'stl') {
+        reader.onload = ev => {
+            try {
+                const loader = new THREE.STLLoader();
+                rawModelData = loader.parse(ev.target.result);
+                currentModelType = 'stl';
+                refreshAllMeshes();
+            } catch(err) { console.error("Error parsing STL."); }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+    else if (ext === 'glb' || ext === 'gltf') {
+        reader.onload = ev => {
+            try {
+                const loader = new THREE.GLTFLoader();
+                loader.parse(ev.target.result, '', (gltf) => {
+                    rawModelData = gltf.scene;
+                    currentModelType = 'gltf';
+                    refreshAllMeshes();
+                });
+            } catch(err) { console.error("Error parsing GLTF."); }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+});
+
+// UI Control Listeners
+el('toggleEdges').addEventListener('click',()=>{
+    showGeometryEdges=!showGeometryEdges;
+    el('toggleEdges').textContent=showGeometryEdges?'Hide Geometry Edges':'Show Geometry Edges';
+    el('toggleEdges').setAttribute('aria-pressed',String(showGeometryEdges));
+    if(isInitialized) buildModelMesh();
+});
+el('clearAllSections').addEventListener('click',()=>{ if(isInitialized){clearPlaneCut();clearSurfaceSelection();} });
+el('toggleSettings').addEventListener('click', () => {
+    const panel = el('rightToolbar');
+    panel.classList.toggle('collapsed');
+    const collapsed=panel.classList.contains('collapsed'), tab=el('toggleSettings');
+    tab.classList.toggle('panel-collapsed',collapsed);
+    tab.textContent=collapsed ? '◀' : '▶';
+    tab.setAttribute('aria-expanded',String(!collapsed));
+    tab.setAttribute('aria-label',collapsed ? 'Expand settings' : 'Minimize settings');
+    tab.title=collapsed ? 'Expand settings' : 'Minimize settings';
+});
+
+el('btnFit').addEventListener('click', () => {
+    if(!isInitialized) return;
+    const box = new THREE.Box3();
+    if(csvGroup.children.length) box.expandByObject(csvGroup);
+    if(ptsGroup.children.length) box.expandByObject(ptsGroup);
+    if(modelGroup.children.length) box.expandByObject(modelGroup);
+    
+    if(!isFinite(box.min.x)) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.y, size.z) || 1;
+    
+    controls.target.copy(center);
+    camera.position.set(center.x + radius*1.5, center.y - radius*1.5, center.z + radius);
+    
+    if (camera.isOrthographicCamera) {
+        const aspect = window.innerWidth / window.innerHeight;
+        camera.left = -radius * 1.5 * aspect;
+        camera.right = radius * 1.5 * aspect;
+        camera.top = radius * 1.5;
+        camera.bottom = -radius * 1.5;
+        camera.updateProjectionMatrix();
+    }
+    controls.update();
+});
+
+el('orthoToggle').addEventListener('change', e => {
+    if(!isInitialized) return;
+    const aspect = window.innerWidth / window.innerHeight;
+    const oldPos = camera.position.clone();
+    const oldTarget = controls.target.clone();
+    
+    if (!e.target.checked) {
+        camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 100000);
+    } else {
+        const dist = oldPos.distanceTo(oldTarget) || 50;
+        camera = new THREE.OrthographicCamera(-dist * aspect / 2, dist * aspect / 2, dist / 2, -dist / 2, 0.1, 100000);
+    }
+    camera.position.copy(oldPos);
+    camera.up.set(0, 0, 1);
+    if (cutControl) cutControl.camera = camera;
+    
+    controls.dispose();
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.copy(oldTarget);
+    controls.screenSpacePanning = true;
+    
+    refreshAllMeshes();
+});
+
+['showTolText', 'tolTextSize', 'maxTolFilter', 'ootThreshold'].forEach(id => {
+    el(id).addEventListener('input', () => {
+        buildCsvMesh();
+    });
+});
+
+['showCsv', 'csvSize', 'showPts', 'ptsOpacity', 'showModel', 'modelOpacity'].forEach(id => {
+    el(id).addEventListener('input', () => {
+        if (id.includes('Csv') || id === 'csvSize') buildCsvMesh();
+        if (id.includes('Pts') || id === 'ptsOpacity') buildPtsMesh();
+        if (id.includes('Model') || id === 'modelOpacity') buildModelMesh();
+    });
+});
+</script>
+</body>
+</html>
