@@ -342,14 +342,14 @@ function rebuildToleranceLabels() {
     const ootThreshold = parseFloat(el('ootThreshold').value) || 50;
 
     visiblePts.forEach(p => {
-        if (p.tol === undefined) return;
-        const mm = Math.round(p.tol * 1000);
+        // Display column I verbatim; F remains the basis of numerical checks.
+        if (p.text === undefined || p.text === '') return;
         const node = document.createElement('div');
         node.className = 'tolValueLabel';
-        node.textContent = String(mm);
+        node.textContent = p.text;
         node.style.fontSize = fontSize + 'px';
-        
-        if (Math.abs(mm) > ootThreshold) node.style.color = '#ef4444'; 
+        const mm = p.tol !== undefined ? Math.round(p.tol * 1000) : undefined;
+        if (mm !== undefined && Math.abs(mm) > ootThreshold) node.style.color = '#ef4444';
         else node.style.color = '#000000';
         
         document.body.appendChild(node);
@@ -931,34 +931,56 @@ function rebuildSectionEdges() {
 }
 
 // File Loaders
+// Parse CSV as strings, including quoted commas and escaped quotes.
+function parseCsvRows(text) {
+    text=text.replace(/^\uFEFF/,'');
+    const rows=[];let row=[],cell='',quoted=false;
+    for(let i=0;i<text.length;i++) {
+        const c=text[i];
+        if(quoted) {
+            if(c==='"') { if(text[i+1]==='"'){cell+='"';i++;} else quoted=false; }
+            else cell+=c;
+        } else if(c==='"' && cell==='') quoted=true;
+        else if(c===','){row.push(cell);cell='';}
+        else if(c==='\r'||c==='\n') {
+            row.push(cell);rows.push(row);row=[];cell='';
+            if(c==='\r'&&text[i+1]==='\n')i++;
+        } else cell+=c;
+    }
+    if(quoted) throw new Error('CSV contains an unterminated quoted field.');
+    if(row.length||cell!==''){row.push(cell);rows.push(row);}
+    return rows;
+}
 el('csvInput').addEventListener('change', async e => {
-    const files = Array.from(e.target.files);
-    e.target.value = '';
-    if (!files.length) return;
+    const files=Array.from(e.target.files);e.target.value='';
+    if(!files.length)return;
     initThree();
     try {
-        const texts = await Promise.all(files.map(file => file.text()));
-        let added = 0;
-        for (const text of texts) {
-            const lines = text.split(/\r?\n/);
-            const headers = (lines[0] || '').replace(/^\uFEFF/, '').toLowerCase().split(',').map(h => h.trim());
-            const ix = headers.findIndex(h => h.includes('east') || h === 'x');
-            const iy = headers.findIndex(h => h.includes('north') || h === 'y');
-            const iz = headers.findIndex(h => h.includes('elevation') || h === 'z');
-            const it = headers.findIndex(h => h.includes('tolerance') || h.includes('deviation'));
-            for (let i=1; i<lines.length; i++) {
-                const c=lines[i].split(',');
-                const x=parseFloat(c[ix >= 0 ? ix : 1]), y=parseFloat(c[iy >= 0 ? iy : 2]), z=parseFloat(c[iz >= 0 ? iz : 3]);
-                const t=it >= 0 ? parseFloat(c[it]) : NaN;
-                if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-                    csvPoints.push({x,y,z,tol:Number.isFinite(t) ? t : undefined}); updateBounds(x,y,z); added++;
+        const texts=await Promise.all(files.map(file=>file.text()));
+        let added=0;const noColumnI=[];
+        for(let f=0;f<texts.length;f++) {
+            const rows=parseCsvRows(texts[f]);if(!rows.length)continue;
+            if(rows[0].length<9) noColumnI.push(files[f].name);
+            const headers=rows[0].map(h=>h.toLowerCase().trim());
+            const ix=headers.findIndex(h=>h.includes('east')||h==='x');
+            const iy=headers.findIndex(h=>h.includes('north')||h==='y');
+            const iz=headers.findIndex(h=>h.includes('elevation')||h==='z');
+            for(let i=1;i<rows.length;i++) {
+                const c=rows[i];
+                const x=parseFloat(c[ix>=0?ix:1]),y=parseFloat(c[iy>=0?iy:2]),z=parseFloat(c[iz>=0?iz:3]);
+                // F = signed deviation in metres; I = literal display text.
+                const t=c[5]===undefined||c[5].trim()===''?NaN:parseFloat(c[5]);
+                const text=c[8]===undefined?'':c[8];
+                if(Number.isFinite(x)&&Number.isFinite(y)&&Number.isFinite(z)) {
+                    csvPoints.push({x,y,z,tol:Number.isFinite(t)?t:undefined,text});
+                    updateBounds(x,y,z);added++;
                 }
             }
         }
-        if (!added) { alert('No valid ENZ points found in the selected CSV files.'); return; }
-        refreshAllMeshes();
-        el('btnFit').click();
-    } catch (err) { console.error('CSV loading failed:', err); alert('CSV loading failed: '+err.message); }
+        if(!added){alert('No valid ENZ points found in the selected CSV files.');return;}
+        refreshAllMeshes();el('btnFit').click();
+        if(noColumnI.length) console.warn('No column I in these CSV files; their tolerance text labels are blank:',noColumnI.join(', '));
+    } catch(err){console.error('CSV loading failed:',err);alert('CSV loading failed: '+err.message);}
 });
 
 // PTS rows: X Y Z intensity R G B Nx Ny Nz. Point count headers are skipped.
