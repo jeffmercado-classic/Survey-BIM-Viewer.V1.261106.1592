@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Survey-BIM Viewer (Multi-section)</title>
+  <title>Survey-BIM Viewer (Section Outlines and Coordinates)</title>
   <style>
     :root { --bg: #eef3f8; --panel: rgba(255, 255, 255, 0.88); --line: #d7e0ea; --text: #1f2937; --accent: #0ea5e9; --accent2: #2563eb; --shadow: 0 10px 30px rgba(15,23,42,0.15); }
     * { box-sizing: border-box; }
@@ -15,6 +15,9 @@
     
     /* Bottom Loader Bar */
     #bottomLoader { bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; width: max-content; }
+    #bottomLoader.imports-collapsed { display: none; }
+    #toggleImports { position: fixed; z-index: 150; left: 50%; bottom: 0; transform: translateX(-50%); border:1px solid var(--line); border-radius:8px 8px 0 0; background:rgba(255,255,255,.94); color:var(--text); padding:5px 14px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 -3px 12px rgba(15,23,42,.08); white-space:nowrap; }
+    #toggleImports:hover { background:#fff; }
     .file-group { display: flex; flex-direction: column; gap: 6px; }
     .file-group span { font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; }
     input[type="file"] { font-size: 12px; color: var(--text); background: #fff; border: 1px solid var(--line); padding: 8px 12px; border-radius: 8px; cursor: pointer; max-width: 250px; }
@@ -36,6 +39,7 @@
 
     .tool-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 500; }
     .tool-row input[type="range"] { width: 100px; }
+    .tool-row select { max-width: 170px; padding:4px; border:1px solid var(--line); border-radius:6px; font-size:11px; background:#fff; }
     .tool-row input[type="number"], .tool-row input[type="text"] { width: 80px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; text-align: right; }
     
     #surfaceMenu { display:none; position:fixed; z-index:200; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 5px 18px rgba(0,0,0,.2); padding:5px; min-width:165px; }
@@ -59,10 +63,12 @@
 <div id="canvas-container"></div>
 <div id="surfaceMenu">
   <button id="createPlaneCut">Create plane cut here</button>
-  <button id="flipPlaneCut">Flip cut direction</button>
-  <button id="removePlaneCut">Remove plane cut</button>
+  <button id="clearAllContext">Clear All Sections</button>
+  <button id="spotCoordinate">Spot Coordinate</button>
+  <button id="clearAllCoordinates">Clear All Coordinates</button>
 </div>
 
+<button id="toggleImports" type="button" aria-controls="bottomLoader" aria-expanded="true" title="Minimize imports">▼ Imports</button>
 <div id="bottomLoader" class="glass-panel">
   <div class="file-group">
     <span style="color: var(--accent2);">1. Report CSV (Appendable)</span>
@@ -121,7 +127,7 @@
   </div>
   <div class="tool-row">
     <label for="ptsOpacity">Point Cloud Opacity</label>
-    <input type="range" id="ptsOpacity" min="0.1" max="1.0" step="0.1" value="0.8">
+    <input type="range" id="ptsOpacity" min="0.0" max="1.0" step="0.1" value="1.0">
   </div>
 
   <hr style="border: 0; border-top: 1px solid var(--line); width: 100%; margin: 2px 0;">
@@ -135,9 +141,6 @@
     <input type="range" id="modelOpacity" min="0.1" max="1.0" step="0.1" value="0.8">
   </div>
   
-  <div class="btn-row">
-    <button class="btn" id="toggleEdges" type="button" aria-pressed="false">Show Geometry Edges</button>
-  </div>
   <hr style="border:0; border-top:1px solid var(--line); width:100%; margin:2px 0;">
   <h2>Section planes</h2>
   <div style="font-size:11px; color:#64748b; line-height:1.4;">Select a surface, then right-click to create a section. Choose a section below to move, flip or remove it.</div>
@@ -163,20 +166,21 @@
 const el = id => document.getElementById(id);
 
 let scene, camera, renderer, controls, raycaster;
-let csvGroup, ptsGroup, modelGroup, inspectGroup;
+let csvGroup, ptsGroup, modelGroup, inspectGroup, spotGroup, sectionLineGroup;
 let globalShift = { x: 0, y: 0, z: 0 };
 let bounds = { minX: Infinity, minY: Infinity, minZ: Infinity, maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity };
 let isInitialized = false;
 
 // Data containers
 let csvPoints = [], ptsRaw = [];
+let spotCoordinates = [], sectionEdgesScheduled = false;
 let rawModelData = null, currentModelType = ''; 
 let rawDXFBlocks = null; // Stores extracted raw PolyFace block arrays
 let toleranceLabels = [];
 let inspectPoint = null, inspectCardNode = null;
 let selectedSurface = null, selectionOutline = null;
 let sections = [], activeSection = null, cutControl = null;
-let nextSectionId = 1, showGeometryEdges = false;
+let nextSectionId = 1, showGeometryEdges = true;
 const MAX_SECTIONS = 6;
 let suppressCutEvents = false, suppressSurfaceClick = false;
 
@@ -191,6 +195,9 @@ function initThree() {
     camera.up.set(0, 0, 1);
 
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // Supersample the canvas in addition to requesting hardware multisampling.
+    // Limit to 2x to keep GPU memory use reasonable for large point clouds.
+    renderer.setPixelRatio(2);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.localClippingEnabled = true;
     container.appendChild(renderer.domElement);
@@ -210,6 +217,8 @@ function initThree() {
     ptsGroup = new THREE.Group(); scene.add(ptsGroup);
     modelGroup = new THREE.Group(); scene.add(modelGroup);
     inspectGroup = new THREE.Group(); scene.add(inspectGroup);
+    spotGroup = new THREE.Group(); scene.add(spotGroup);
+    sectionLineGroup = new THREE.Group(); scene.add(sectionLineGroup);
 
     renderer.domElement.addEventListener('click', (e) => {
         if (!csvPoints.length) return;
@@ -285,6 +294,9 @@ function calculateShift() {
     }
     const shiftDelta = new THREE.Vector3(old.x-globalShift.x, old.y-globalShift.y, old.z-globalShift.z);
     if (selectionOutline) selectionOutline.position.add(shiftDelta);
+    for (const spot of spotCoordinates) {
+        spot.marker.position.set(spot.point.x-globalShift.x,spot.point.y-globalShift.y,spot.point.z-globalShift.z);
+    }
     suppressCutEvents = true;
     for (const section of sections) {
         section.pivot.position.add(shiftDelta);
@@ -357,6 +369,12 @@ function updateLabels() {
         }
     });
 
+    for (const spot of spotCoordinates) {
+        const projected=worldToScreen(spot.point.x,spot.point.y,spot.point.z);
+        if (projected.visible && isSurveyPointVisible(spot.point)) {
+            spot.node.style.left=projected.x+'px'; spot.node.style.top=projected.y+'px'; spot.node.style.display='block';
+        } else spot.node.style.display='none';
+    }
     if (inspectPoint && inspectCardNode) {
         const s = worldToScreen(inspectPoint.x, inspectPoint.y, inspectPoint.z);
         if (s.visible && isSurveyPointVisible(inspectPoint)) {
@@ -385,11 +403,10 @@ function updateInspectCard() {
     inspectCardNode = document.createElement('div');
     inspectCardNode.className = 'inspectCard';
     const mmVal = inspectPoint.tol !== undefined ? (inspectPoint.tol * 1000).toFixed(1) + ' mm' : 'N/A';
-    inspectCardNode.textContent = `Inspect Point (ENZ-Tol)\n` +
-                                `East / X:  ${inspectPoint.x.toFixed(3)} m\n` +
+    inspectCardNode.textContent = `East / X:  ${inspectPoint.x.toFixed(3)} m\n` +
                                 `North / Y: ${inspectPoint.y.toFixed(3)} m\n` +
                                 `Elev / Z:  ${inspectPoint.z.toFixed(3)} m\n` +
-                                `Tolerance: ${mmVal}`;
+                                `Text: ${mmVal}`;
     document.body.appendChild(inspectCardNode);
 }
 
@@ -434,33 +451,34 @@ function buildCsvMesh() {
 
 function buildPtsMesh() {
     if (!isInitialized) return;
-    while(ptsGroup.children.length) { const obj = ptsGroup.children[0]; ptsGroup.remove(obj); if (obj.geometry) obj.geometry.dispose(); if (obj.material) obj.material.dispose(); }
-    if(!ptsRaw.length || !el('showPts').checked) return;
+    while (ptsGroup.children.length) {
+        const obj = ptsGroup.children[0]; ptsGroup.remove(obj);
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+    }
+    if (!ptsRaw.length || !el('showPts').checked) return;
 
     const geo = new THREE.BufferGeometry();
     const pos = new Float32Array(ptsRaw.length * 3);
     const cols = new Float32Array(ptsRaw.length * 3);
-
     ptsRaw.forEach((p, i) => {
-        pos[i*3] = p.x - globalShift.x; pos[i*3+1] = p.y - globalShift.y; pos[i*3+2] = p.z - globalShift.z;
-        cols[i*3] = p.r/255; cols[i*3+1] = p.g/255; cols[i*3+2] = p.b/255;
+        const j=i*3;
+        pos[j]=p.x-globalShift.x; pos[j+1]=p.y-globalShift.y; pos[j+2]=p.z-globalShift.z;
+        if (p.hasRGB) {
+            cols[j]=p.r; cols[j+1]=p.g; cols[j+2]=p.b;
+        } else {
+            cols[j]=cols[j+1]=cols[j+2]=0.5;
+        }
     });
-
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-
-    let pOpacity = parseFloat(el('ptsOpacity').value);
-    let pSize = el('orthoToggle').checked ? 1.0 : 0.05;
-
-    const mat = new THREE.PointsMaterial({ size: pSize, sizeAttenuation: true, vertexColors: true, transparent: true, opacity: pOpacity });
-    
-    // Frustum fix: compute bounds aggressively so Threejs knows they exist instantly
-    geo.computeBoundingSphere();
-    geo.computeBoundingBox();
-    const points = new THREE.Points(geo, mat);
-    points.frustumCulled = false;
-    ptsGroup.add(points);
-    applyClipping();
+    geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('color',new THREE.BufferAttribute(cols,3));
+    const opacity = parseFloat(el('ptsOpacity').value);
+    const pointSize = el('orthoToggle').checked ? 1.0 : 0.05;
+    const mat = new THREE.PointsMaterial({size:pointSize,sizeAttenuation:true,vertexColors:true,
+        transparent:opacity<1,opacity,depthWrite:opacity>=1});
+    geo.computeBoundingSphere(); geo.computeBoundingBox();
+    const points=new THREE.Points(geo,mat); points.frustumCulled=false;
+    ptsGroup.add(points); applyClipping();
 }
 
 // ASCII DXF PolyFace reader: resolves model-space block instances and OCS INSERTs.
@@ -595,7 +613,7 @@ function buildModelMesh() {
         });
         if (obj.userData && obj.userData.ownedDxf) { if(obj.geometry) obj.geometry.dispose(); if(obj.material) obj.material.dispose(); }
     }
-    if(!rawModelData || !el('showModel').checked) return;
+    if(!rawModelData || !el('showModel').checked) { scheduleSectionEdges(); return; }
 
     const opacity = parseFloat(el('modelOpacity').value);
     const isTransparent = opacity < 1.0;
@@ -679,7 +697,7 @@ function isSurveyPointVisible(point) {
 function applyClipping() {
     if (!isInitialized) return;
     const planes=sections.map(section => section.plane);
-    for (const group of [csvGroup,ptsGroup,modelGroup,inspectGroup]) {
+    for (const group of [csvGroup,ptsGroup,modelGroup,inspectGroup,spotGroup]) {
         group.traverse(obj => {
             if (!obj.material) return;
             const materials=Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -692,6 +710,7 @@ function applyClipping() {
             }
         });
     }
+    scheduleSectionEdges();
 }
 function clearSurfaceSelection() {
     selectedSurface=null;
@@ -713,16 +732,20 @@ function selectModelSurface(e) {
     if (normal.lengthSq()<1e-12) return false;
     clearSurfaceSelection();
     selectedSurface={point:hit.point.clone().add(new THREE.Vector3(globalShift.x,globalShift.y,globalShift.z)),normal};
-    const attr=hit.object.geometry.getAttribute('position');
-    const tri=[hit.face.a,hit.face.b,hit.face.c].map(i=>new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(hit.object.matrixWorld));
-    const outlineGeo=new THREE.BufferGeometry().setFromPoints([tri[0],tri[1],tri[1],tri[2],tri[2],tri[0]]);
-    selectionOutline=new THREE.LineSegments(outlineGeo,new THREE.LineBasicMaterial({color:0xff4d00,depthTest:false}));
-    selectionOutline.renderOrder=999; scene.add(selectionOutline);
+    // Show a selection indicator only before the first section is created.
+    if (sections.length === 0) {
+        const attr=hit.object.geometry.getAttribute('position');
+        const tri=[hit.face.a,hit.face.b,hit.face.c].map(i=>new THREE.Vector3().fromBufferAttribute(attr,i).applyMatrix4(hit.object.matrixWorld));
+        const outlineGeo=new THREE.BufferGeometry().setFromPoints([tri[0],tri[1],tri[1],tri[2],tri[2],tri[0]]);
+        selectionOutline=new THREE.LineSegments(outlineGeo,new THREE.LineBasicMaterial({color:0xff4d00,depthTest:false}));
+        selectionOutline.renderOrder=999; scene.add(selectionOutline);
+    }
     return true;
 }
 function updateCutFromPivot() {
     if (!activeSection || suppressCutEvents) return;
     activeSection.plane.setFromNormalAndCoplanarPoint(activeSection.plane.normal,activeSection.pivot.position);
+    scheduleSectionEdges();
 }
 function renderSectionList() {
     const list=el('sectionList'); list.textContent='';
@@ -769,7 +792,7 @@ function createPlaneCut() {
     const section={id:nextSectionId++,pivot,plane}; sections.push(section);
     activateSection(section); applyClipping(); clearSurfaceSelection();
 }
-function flipSection(section) { if(section && sections.includes(section)) section.plane.negate(); }
+function flipSection(section) { if(section && sections.includes(section)) { section.plane.negate(); scheduleSectionEdges(); } }
 function flipPlaneCut() { flipSection(activeSection); }
 function removeSection(section) {
     const index=sections.indexOf(section); if(index<0) return;
@@ -796,20 +819,116 @@ function setupSurfaceInteraction() {
         rightStart=null;
         // Keep an already selected surface; a direct right-click can also select one.
         if(!selectedSurface) selectModelSurface(e);
-        if(!selectedSurface && !activeSection) return;
+        if(!selectedSurface && !sections.length && !spotCoordinates.length) return;
         el('createPlaneCut').disabled=!selectedSurface || sections.length>=MAX_SECTIONS;
-        el('flipPlaneCut').disabled=!activeSection; el('removePlaneCut').disabled=!activeSection;
+        el('clearAllContext').disabled=!sections.length;
+        el('spotCoordinate').disabled=!selectedSurface;
+        el('clearAllCoordinates').disabled=!spotCoordinates.length;
         menu.style.display='block';
         menu.style.left=Math.max(0,Math.min(e.clientX,window.innerWidth-menu.offsetWidth-5))+'px';
         menu.style.top=Math.max(0,Math.min(e.clientY,window.innerHeight-menu.offsetHeight-5))+'px';
     });
     document.addEventListener('pointerdown',e=>{if(!menu.contains(e.target)) menu.style.display='none';});
     el('createPlaneCut').addEventListener('click',()=>{menu.style.display='none';createPlaneCut();});
-    el('flipPlaneCut').addEventListener('click',()=>{menu.style.display='none';flipPlaneCut();});
-    el('removePlaneCut').addEventListener('click',()=>{menu.style.display='none';removeSection(activeSection);clearSurfaceSelection();});
+    el('clearAllContext').addEventListener('click',()=>{menu.style.display='none';clearPlaneCut();clearSurfaceSelection();});
+    el('spotCoordinate').addEventListener('click',()=>{menu.style.display='none';addSpotCoordinate();});
+    el('clearAllCoordinates').addEventListener('click',()=>{menu.style.display='none';clearAllSpotCoordinates();clearSurfaceSelection();});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'){menu.style.display='none';clearSurfaceSelection();}});
 }
 
+
+function addSpotCoordinate() {
+    if (!selectedSurface) return;
+    const p=selectedSurface.point;
+    const point={x:p.x,y:p.y,z:p.z};
+    const marker=new THREE.Mesh(new THREE.SphereGeometry(0.055,12,12),new THREE.MeshBasicMaterial({color:0x0069e8,depthTest:false}));
+    marker.position.set(point.x-globalShift.x,point.y-globalShift.y,point.z-globalShift.z);
+    marker.renderOrder=900; spotGroup.add(marker);
+    const node=document.createElement('div'); node.className='inspectCard';
+    node.textContent='East / X:  '+point.x.toFixed(3)+' m\nNorth / Y: '+point.y.toFixed(3)+' m\nElev / Z:  '+point.z.toFixed(3)+' m';
+    document.body.appendChild(node); spotCoordinates.push({point,marker,node});
+    applyClipping(); clearSurfaceSelection();
+}
+function clearAllSpotCoordinates() {
+    for (const spot of spotCoordinates) {
+        spot.node.remove(); spotGroup.remove(spot.marker);
+        spot.marker.geometry.dispose(); spot.marker.material.dispose();
+    }
+    spotCoordinates=[];
+}
+
+// Compute triangle/plane intersections. These are section outlines, not caps.
+// Coalesce updates to at most one rebuild per animation frame while dragging.
+function scheduleSectionEdges() {
+    if (!isInitialized || !sectionLineGroup || sectionEdgesScheduled) return;
+    sectionEdgesScheduled=true;
+    requestAnimationFrame(()=>{sectionEdgesScheduled=false;rebuildSectionEdges();});
+}
+function rebuildSectionEdges() {
+    if (!sectionLineGroup) return;
+    while(sectionLineGroup.children.length) {
+        const old=sectionLineGroup.children[0]; sectionLineGroup.remove(old);
+        if(old.geometry) old.geometry.dispose(); if(old.material) old.material.dispose();
+    }
+    if (!sections.length || !el('showModel').checked || !modelGroup.children.length) return;
+    scene.updateMatrixWorld(true);
+    const lines=[], eps=1e-6;
+    function visibleSegment(a,b,own) {
+        // Clip each line to the retained half-space of all the other sections.
+        for(const other of sections) {
+            if(other===own) continue;
+            const da=other.plane.distanceToPoint(a), db=other.plane.distanceToPoint(b);
+            if(da < -eps && db < -eps) return false;
+            if((da < -eps) !== (db < -eps)) {
+                const t=da/(da-db), point=a.clone().lerp(b,t);
+                if(da < -eps) a.copy(point); else b.copy(point);
+            }
+        }
+        return a.distanceToSquared(b)>eps*eps;
+    }
+    modelGroup.traverse(mesh=>{
+        if(!mesh.isMesh || !mesh.geometry) return;
+        const geometry=mesh.geometry, attr=geometry.getAttribute('position');
+        if(!attr) return;
+        const world=new Float64Array(attr.count*3), tmp=new THREE.Vector3();
+        for(let i=0;i<attr.count;i++) {
+            tmp.fromBufferAttribute(attr,i).applyMatrix4(mesh.matrixWorld);
+            world[i*3]=tmp.x;world[i*3+1]=tmp.y;world[i*3+2]=tmp.z;
+        }
+        const index=geometry.getIndex(), count=index ? index.count : attr.count;
+        const getPoint=i=>{const k=(index?index.getX(i):i)*3;return new THREE.Vector3(world[k],world[k+1],world[k+2]);};
+        for(let i=0;i+2<count;i+=3) {
+            const vertices=[getPoint(i),getPoint(i+1),getPoint(i+2)];
+            for(const section of sections) {
+                const d=vertices.map(v=>section.plane.distanceToPoint(v));
+                if((d[0]>eps&&d[1]>eps&&d[2]>eps)||(d[0]<-eps&&d[1]<-eps&&d[2]<-eps)) continue;
+                // Do not draw the triangulation of a surface coplanar with the cut.
+                if(d.every(v=>Math.abs(v)<=eps)) continue;
+                const hits=[];
+                function add(p) {if(!hits.some(q=>q.distanceToSquared(p)<=eps*eps)) hits.push(p);}
+                for(let e=0;e<3;e++) {
+                    const f=(e+1)%3, a=vertices[e], b=vertices[f];
+                    if(Math.abs(d[e])<=eps) add(a.clone());
+                    if((d[e]>eps&&d[f]<-eps)||(d[e]<-eps&&d[f]>eps)) add(a.clone().lerp(b,d[e]/(d[e]-d[f])));
+                }
+                if(hits.length<2) continue;
+                let a=hits[0],b=hits[1], max=a.distanceToSquared(b);
+                for(let h=0;h<hits.length;h++) for(let j=h+1;j<hits.length;j++) {
+                    const dist=hits[h].distanceToSquared(hits[j]); if(dist>max){max=dist;a=hits[h];b=hits[j];}
+                }
+                a=a.clone();b=b.clone();
+                if(visibleSegment(a,b,section)) lines.push(a.x,a.y,a.z,b.x,b.y,b.z);
+            }
+        }
+    });
+    if(!lines.length) return;
+    const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(lines,3));
+    const mat=new THREE.LineBasicMaterial({color:0x000000,transparent:true,opacity:1,depthTest:true,depthWrite:false});
+    // A small depth bias limits z-fighting with the cut surface while keeping occlusion.
+    mat.onBeforeCompile=shader=>{shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>','#include <project_vertex>\ngl_Position.z -= 0.00001 * gl_Position.w;');};
+    mat.customProgramCacheKey=()=> 'section-outline-depth-bias-v1';
+    const outline=new THREE.LineSegments(geo,mat);outline.renderOrder=3;sectionLineGroup.add(outline);
+}
 
 // File Loaders
 el('csvInput').addEventListener('change', async e => {
@@ -842,60 +961,49 @@ el('csvInput').addEventListener('change', async e => {
     } catch (err) { console.error('CSV loading failed:', err); alert('CSV loading failed: '+err.message); }
 });
 
-el('ptsInput').addEventListener('change', e => {
-    const file = e.target.files[0];
-    if(!file) return;
-
-    let keepRatioPrompt = prompt("Enter percentage of point cloud to keep (1 to 100):", "30");
-    if (keepRatioPrompt === null) {
-        e.target.value = ''; 
-        return;
-    }
-    
-    let keepRatio = parseFloat(keepRatioPrompt) / 100;
-    if (isNaN(keepRatio) || keepRatio <= 0 || keepRatio > 1) {
-        alert("Invalid percentage. Defaulting to 30%.");
-        keepRatio = 0.3;
-    }
-
-    initThree();
-    const CHUNK = 1024 * 1024 * 4;
-    let offset = 0, leftover = '';
-    ptsRaw = [];
-
-    function processLines(text) {
-        const lines = text.split(/\r?\n/);
-        leftover = lines.pop() || '';
-        for (const ln of lines) {
-            if (Math.random() > keepRatio) continue; 
-            const p = ln.trim().split(/[\s\t]+/);
-            if (p.length < 3) continue;
-            const x = parseFloat(p[0]), y = parseFloat(p[1]), z = parseFloat(p[2]);
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-            
-            let r = 200, g = 200, b = 200;
-            if (p.length >= 6) {
-                const cOff = p.length === 7 ? 4 : 3; 
-                r = Number.isFinite(parseInt(p[cOff])) ? parseInt(p[cOff]) : 200; g = Number.isFinite(parseInt(p[cOff+1])) ? parseInt(p[cOff+1]) : 200; b = Number.isFinite(parseInt(p[cOff+2])) ? parseInt(p[cOff+2]) : 200;
-            }
-            ptsRaw.push({ x, y, z, r, g, b });
-            updateBounds(x, y, z);
+// PTS rows: X Y Z intensity R G B Nx Ny Nz. Point count headers are skipped.
+function parsePtsPoint(line) {
+    const p=line.trim().split(/\s+/); if(p.length<3) return null;
+    const x=Number(p[0]),y=Number(p[1]),z=Number(p[2]);
+    if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z)) return null;
+    const channel=value=>{if(value===undefined||value==='')return null;const v=Number(value);return Number.isFinite(v)&&v>=0&&v<=255?v/255:null;};
+    // X Y Z I R G B Nx Ny Nz. Intensity and normals do not override RGB.
+    const r=channel(p[4]),g=channel(p[5]),b=channel(p[6]);
+    return {x,y,z,r,g,b,hasRGB:r!==null&&g!==null&&b!==null};
+}
+el('ptsInput').addEventListener('change',e=>{
+    const file=e.target.files[0];if(!file)return;
+    const answer=prompt('Enter percentage of point cloud to keep (1 to 100):','30');
+    if(answer===null){e.target.value='';return;}
+    let keepRatio=parseFloat(answer)/100;
+    if(!Number.isFinite(keepRatio)||keepRatio<=0||keepRatio>1){alert('Invalid percentage. Defaulting to 30%.');keepRatio=0.3;}
+    initThree();e.target.value='';
+    const CHUNK=1024*1024*4;let offset=0,leftover='',missingRGB=0;
+    ptsRaw=[];
+    function processLines(text){
+        const lines=text.split(/\r?\n/);leftover=lines.pop()||'';
+        for(const line of lines){
+            const clean=line.trim();if(!clean||/^\d+$/.test(clean))continue;
+            if(Math.random()>keepRatio)continue;
+            const point=parsePtsPoint(clean);if(!point)continue;
+            if(!point.hasRGB)missingRGB++;
+            ptsRaw.push(point);updateBounds(point.x,point.y,point.z);
         }
     }
-
-    function readNext() {
-        const reader = new FileReader();
-        reader.onload = ev => {
-            processLines(leftover + ev.target.result);
-            offset += CHUNK;
-            if (offset < file.size) {
-                setTimeout(readNext, 5);
-            } else {
-                if(leftover) processLines(leftover + '\n');
+    function readNext(){
+        const reader=new FileReader();
+        reader.onload=ev=>{
+            processLines(leftover+ev.target.result);offset+=CHUNK;
+            if(offset<file.size)setTimeout(readNext,5);
+            else{
+                if(leftover)processLines(leftover+'\n');
+                if(!ptsRaw.length){alert('No valid sampled PTS points found.');return;}
                 refreshAllMeshes();
+                if(missingRGB) console.warn('PTS: '+missingRGB+' sampled points have missing/invalid RGB and are shown grey.');
             }
         };
-        reader.readAsText(file.slice(offset, offset + CHUNK));
+        reader.onerror=()=>alert('Could not read the PTS file.');
+        reader.readAsText(file.slice(offset,offset+CHUNK));
     }
     readNext();
 });
@@ -961,12 +1069,22 @@ el('modelInput').addEventListener('change', e => {
 });
 
 // UI Control Listeners
-el('toggleEdges').addEventListener('click',()=>{
-    showGeometryEdges=!showGeometryEdges;
-    el('toggleEdges').textContent=showGeometryEdges?'Hide Geometry Edges':'Show Geometry Edges';
-    el('toggleEdges').setAttribute('aria-pressed',String(showGeometryEdges));
-    if(isInitialized) buildModelMesh();
+function placeImportsTab() {
+    const panel=el('bottomLoader'), tab=el('toggleImports');
+    if (panel.classList.contains('imports-collapsed')) tab.style.bottom='0px';
+    else tab.style.bottom=Math.max(0,window.innerHeight-panel.getBoundingClientRect().top)+'px';
+}
+el('toggleImports').addEventListener('click',()=>{
+    const panel=el('bottomLoader'), tab=el('toggleImports');
+    panel.classList.toggle('imports-collapsed');
+    const collapsed=panel.classList.contains('imports-collapsed');
+    tab.textContent=collapsed ? '▲ Imports' : '▼ Imports';
+    tab.title=collapsed ? 'Expand imports' : 'Minimize imports';
+    tab.setAttribute('aria-expanded',String(!collapsed));
+    placeImportsTab();
 });
+window.addEventListener('resize',placeImportsTab);
+requestAnimationFrame(placeImportsTab);
 el('clearAllSections').addEventListener('click',()=>{ if(isInitialized){clearPlaneCut();clearSurfaceSelection();} });
 el('toggleSettings').addEventListener('click', () => {
     const panel = el('rightToolbar');
